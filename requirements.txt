@@ -1,7 +1,0 @@
-distrax==0.1.5
-gym==0.26.2
-gymnax==0.0.9
-jaxopt==0.8.5
-matplotlib-inline==0.1.7
-optax==0.2.5
-wandb==0.21.0
