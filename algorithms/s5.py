@@ -1,10 +1,11 @@
 from functools import partial
+
 import jax
 import jax.numpy as np
 import jax.numpy as jnp
 from flax import linen as nn
-from jax.nn.initializers import lecun_normal, normal
 from jax import random
+from jax.nn.initializers import lecun_normal, normal
 from jax.numpy.linalg import eigh
 
 
@@ -298,10 +299,10 @@ def apply_ssm(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_s
 
 
 class S5SSM(nn.Module):
-    Lambda_re_init: np.DeviceArray
-    Lambda_im_init: np.DeviceArray
-    V: np.DeviceArray
-    Vinv: np.DeviceArray
+    Lambda_re_init: jax.Array
+    Lambda_im_init: jax.Array
+    V: jax.Array
+    Vinv: jax.Array
 
     H: int
     P: int

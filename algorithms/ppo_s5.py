@@ -1,16 +1,20 @@
+from typing import Any, Dict, NamedTuple, Sequence
+
+import distrax
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
 import numpy as np
 import optax
-from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Any, Dict
-from flax.training.train_state import TrainState
-import distrax
-from envs.wrappers import LogWrapper
-from gymnax.environments import spaces
-from .s5 import init_S5SSM, make_DPLR_HiPPO, StackedEncoderModel
 import wandb
+from flax.linen.initializers import constant, orthogonal
+from flax.training.train_state import TrainState
+from gymnax.environments import spaces
+
+from envs.wrappers import LogWrapper
+
+from .s5 import StackedEncoderModel, init_S5SSM, make_DPLR_HiPPO
+
 
 class ActorCriticS5(nn.Module):
     action_dim: Sequence[int]
@@ -245,11 +249,11 @@ def make_train(config):
                 permutation = jax.random.permutation(_rng, config["NUM_ENVS"])
                 batch = (init_hstate, traj_batch, advantages, targets)
 
-                shuffled_batch = jax.tree_util.tree_map(
+                shuffled_batch = jax.tree.map(
                     lambda x: jnp.take(x, permutation, axis=1), batch
                 )
 
-                minibatches = jax.tree_util.tree_map(
+                minibatches = jax.tree.map(
                     lambda x: jnp.swapaxes(jnp.reshape(
                         x, [x.shape[0], config["NUM_MINIBATCHES"], -1] + list(x.shape[2:])
                     ), 1, 0),

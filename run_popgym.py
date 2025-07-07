@@ -1,11 +1,14 @@
+import argparse
+import time
+
 import jax
 import jax.numpy as jnp
-import time
-from envs import make
-from envs.wrappers import AliasPrevActionV2
+
 from algorithms.ppo_gru import make_train as make_train_gru
 from algorithms.ppo_s5 import make_train as make_train_s5
-import argparse
+from envs import make
+from envs.wrappers import AliasPrevActionV2
+
 
 def run(num_runs, env_name, arch="gru", file_tag=""):
     print("*"*10)

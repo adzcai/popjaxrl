@@ -1,7 +1,11 @@
+from typing import Optional, Tuple, Union
+
+import chex
 import jax
 import jax.numpy as jnp
-from gymnax.wrappers.purerl import GymnaxWrapper, environment, Optional, partial, Tuple, chex, spaces, Union
 from flax import struct
+from gymnax.wrappers.purerl import GymnaxWrapper, environment, partial, spaces
+
 
 class AliasPrevAction(GymnaxWrapper):
     """Adds a t0 flag and the last action."""

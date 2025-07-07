@@ -1,10 +1,11 @@
+from typing import Optional, Tuple
+
+import chex
 import jax
 import jax.numpy as jnp
-from jax import lax
-from gymnax.environments import environment, spaces
-from typing import Tuple, Optional
-import chex
 from flax import struct
+from gymnax.environments import environment, spaces
+from jax import lax
 
 
 @struct.dataclass

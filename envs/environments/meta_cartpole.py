@@ -1,13 +1,15 @@
-import jax.numpy as jnp
-import jax
-import flax.linen as nn
-from gymnax.environments import environment, spaces
-from flax import struct
+from typing import Optional, Tuple
+
 import chex
-from typing import Tuple, Optional
-from flax.linen.initializers import constant, orthogonal
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
 import numpy as np
-from .popgym_cartpole import NoisyStatelessCartPole, EnvParams, EnvState
+from flax import struct
+from flax.linen.initializers import constant, orthogonal
+from gymnax.environments import environment, spaces
+
+from .popgym_cartpole import EnvParams, EnvState, NoisyStatelessCartPole
 
 
 class MetaAugNetwork(nn.Module):
@@ -54,7 +56,7 @@ class NoisyStatelessMetaCartPole(environment.Environment):
         # env_obs_re, env_state_re = self.env.reset_env(key_reset, params.env_params)
         env_obs_re, env_state_re = state.init_obs, state.init_state
 
-        env_state = jax.tree_map(
+        env_state = jax.tree.map(
             lambda x, y: jax.lax.select(env_done, x, y), env_state_re, env_state_st
         )
         env_obs = jax.lax.select(env_done, env_obs_re, env_obs_st)

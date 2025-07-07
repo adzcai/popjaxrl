@@ -1,16 +1,18 @@
+import functools
+from typing import Dict, NamedTuple, Sequence
+
+import distrax
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
 import numpy as np
 import optax
-from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Dict
-from flax.training.train_state import TrainState
-import distrax
-from envs.wrappers import LogWrapper
-import functools
-from gymnax.environments import spaces
 import wandb
+from flax.linen.initializers import constant, orthogonal
+from flax.training.train_state import TrainState
+from gymnax.environments import spaces
+
+from envs.wrappers import LogWrapper
 
 
 class ScannedRNN(nn.Module):
@@ -212,11 +214,11 @@ def make_train(config):
                 permutation = jax.random.permutation(_rng, config["NUM_ENVS"])
                 batch = (init_hstate, traj_batch, advantages, targets)
 
-                shuffled_batch = jax.tree_util.tree_map(
+                shuffled_batch = jax.tree.map(
                     lambda x: jnp.take(x, permutation, axis=1), batch
                 )
 
-                minibatches = jax.tree_util.tree_map(
+                minibatches = jax.tree.map(
                     lambda x: jnp.swapaxes(jnp.reshape(
                         x, [x.shape[0], config["NUM_MINIBATCHES"], -1] + list(x.shape[2:])
                     ), 1, 0),
