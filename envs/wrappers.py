@@ -1,5 +1,3 @@
-from typing import Optional, Tuple, Union
-
 import chex
 import jax
 import jax.numpy as jnp
@@ -21,23 +19,39 @@ class AliasPrevAction(GymnaxWrapper):
         og_observation_space = self._env.observation_space(params)
         if type(action_space) == spaces.Discrete:
             low = jnp.concatenate([og_observation_space.low, jnp.array([0.0, 0.0])])
-            high = jnp.concatenate([og_observation_space.high, jnp.array([action_space.n - 1, 1.0])])
+            high = jnp.concatenate(
+                [og_observation_space.high, jnp.array([action_space.n - 1, 1.0])]
+            )
         elif type(action_space) == spaces.Box:
-            low = jnp.concatenate([og_observation_space.low, jnp.array([action_space.low]), jnp.array([0.0])])
-            high = jnp.concatenate([og_observation_space.high, jnp.array([action_space.high]), jnp.array([1.0])])
+            low = jnp.concatenate(
+                [
+                    og_observation_space.low,
+                    jnp.array([action_space.low]),
+                    jnp.array([0.0]),
+                ]
+            )
+            high = jnp.concatenate(
+                [
+                    og_observation_space.high,
+                    jnp.array([action_space.high]),
+                    jnp.array([1.0]),
+                ]
+            )
         else:
             raise NotImplementedError
         return spaces.Box(
             low=low,
             high=high,
-            shape=(self._env.observation_space(params).shape[-1]+2,), # NOTE: ASSUMES FLAT RIGHT NOW
+            shape=(
+                self._env.observation_space(params).shape[-1] + 2,
+            ),  # NOTE: ASSUMES FLAT RIGHT NOW
             dtype=self._env.observation_space(params).dtype,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ) -> Tuple[chex.Array, environment.EnvState]:
+        self, key: chex.PRNGKey, params: environment.EnvParams | None = None
+    ) -> tuple[chex.Array, environment.EnvState]:
         obs, state = self._env.reset(key, params)
         obs = jnp.concatenate([obs, jnp.array([0.0, 1.0])])
         return obs, state
@@ -47,18 +61,17 @@ class AliasPrevAction(GymnaxWrapper):
         self,
         key: chex.PRNGKey,
         state: environment.EnvState,
-        action: Union[int, float],
-        params: Optional[environment.EnvParams] = None,
-    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
-        obs, state, reward, done, info = self._env.step(
-            key, state, action, params
-        )
+        action: int | float,
+        params: environment.EnvParams | None = None,
+    ) -> tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
         action_space = self._env.action_space(params)
         if isinstance(action_space, spaces.Discrete):
             obs = jnp.concatenate([obs, jnp.array([action, 0.0])])
         else:
             obs = jnp.concatenate([obs, action, jnp.array([0.0])])
         return obs, state, reward, done, info
+
 
 class AliasPrevActionV2(GymnaxWrapper):
     """Adds a t0 flag and the last action."""
@@ -73,21 +86,41 @@ class AliasPrevActionV2(GymnaxWrapper):
         action_space = self._env.action_space(params)
         og_observation_space = self._env.observation_space(params)
         if type(action_space) == spaces.Discrete:
-            low = jnp.concatenate([og_observation_space.low, jnp.zeros((action_space.n+1,))])
-            high = jnp.concatenate([og_observation_space.high, jnp.ones((action_space.n+1,))])
+            low = jnp.concatenate(
+                [og_observation_space.low, jnp.zeros((action_space.n + 1,))]
+            )
+            high = jnp.concatenate(
+                [og_observation_space.high, jnp.ones((action_space.n + 1,))]
+            )
             return spaces.Box(
                 low=low,
                 high=high,
-                shape=(self._env.observation_space(params).shape[-1]+action_space.n+1,), # NOTE: ASSUMES FLAT RIGHT NOW
+                shape=(
+                    self._env.observation_space(params).shape[-1] + action_space.n + 1,
+                ),  # NOTE: ASSUMES FLAT RIGHT NOW
                 dtype=self._env.observation_space(params).dtype,
             )
         elif type(action_space) == spaces.Box:
-            low = jnp.concatenate([og_observation_space.low, jnp.array([action_space.low]), jnp.array([0.0])])
-            high = jnp.concatenate([og_observation_space.high, jnp.array([action_space.high]), jnp.array([1.0])])
+            low = jnp.concatenate(
+                [
+                    og_observation_space.low,
+                    jnp.array([action_space.low]),
+                    jnp.array([0.0]),
+                ]
+            )
+            high = jnp.concatenate(
+                [
+                    og_observation_space.high,
+                    jnp.array([action_space.high]),
+                    jnp.array([1.0]),
+                ]
+            )
             return spaces.Box(
                 low=low,
                 high=high,
-                shape=(self._env.observation_space(params).shape[-1]+2,), # NOTE: ASSUMES FLAT RIGHT NOW
+                shape=(
+                    self._env.observation_space(params).shape[-1] + 2,
+                ),  # NOTE: ASSUMES FLAT RIGHT NOW
                 dtype=self._env.observation_space(params).dtype,
             )
         else:
@@ -95,8 +128,8 @@ class AliasPrevActionV2(GymnaxWrapper):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ) -> Tuple[chex.Array, environment.EnvState]:
+        self, key: chex.PRNGKey, params: environment.EnvParams | None = None
+    ) -> tuple[chex.Array, environment.EnvState]:
         action_space = self._env.action_space(params)
         obs, state = self._env.reset(key, params)
         if isinstance(action_space, spaces.Box):
@@ -112,12 +145,10 @@ class AliasPrevActionV2(GymnaxWrapper):
         self,
         key: chex.PRNGKey,
         state: environment.EnvState,
-        action: Union[int, float],
-        params: Optional[environment.EnvParams] = None,
-    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
-        obs, state, reward, done, info = self._env.step(
-            key, state, action, params
-        )
+        action: int | float,
+        params: environment.EnvParams | None = None,
+    ) -> tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
         action_space = self._env.action_space(params)
         if isinstance(action_space, spaces.Discrete):
             # obs = jnp.concatenate([obs, jnp.array([action, 0.0])])
@@ -128,6 +159,7 @@ class AliasPrevActionV2(GymnaxWrapper):
             obs = jnp.concatenate([obs, action, jnp.array([0.0])])
         return obs, state, reward, done, info
 
+
 @struct.dataclass
 class LogEnvState:
     env_state: environment.EnvState
@@ -137,6 +169,7 @@ class LogEnvState:
     returned_episode_lengths: int
     timestep: int
 
+
 class LogWrapper(GymnaxWrapper):
     """Log the episode returns and lengths."""
 
@@ -145,8 +178,8 @@ class LogWrapper(GymnaxWrapper):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ) -> Tuple[chex.Array, environment.EnvState]:
+        self, key: chex.PRNGKey, params: environment.EnvParams | None = None
+    ) -> tuple[chex.Array, environment.EnvState]:
         obs, env_state = self._env.reset(key, params)
         state = LogEnvState(env_state, 0, 0, 0, 0, 0)
         return obs, state
@@ -156,23 +189,29 @@ class LogWrapper(GymnaxWrapper):
         self,
         key: chex.PRNGKey,
         state: environment.EnvState,
-        action: Union[int, float],
-        params: Optional[environment.EnvParams] = None,
-    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
-        obs, env_state, reward, done, info = self._env.step(key, state.env_state, action, params)
+        action: int | float,
+        params: environment.EnvParams | None = None,
+    ) -> tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, env_state, reward, done, info = self._env.step(
+            key, state.env_state, action, params
+        )
         new_episode_return = state.episode_returns + reward
         new_episode_length = state.episode_lengths + 1
         state = LogEnvState(
-            env_state = env_state,
-            episode_returns = new_episode_return * (1 - done),
-            episode_lengths = new_episode_length * (1 - done),
-            returned_episode_returns = state.returned_episode_returns * (1 - done) + new_episode_return * done,
-            returned_episode_lengths = state.returned_episode_lengths * (1 - done) + new_episode_length * done,
-            timestep = state.timestep + 1,
+            env_state=env_state,
+            episode_returns=new_episode_return * (1 - done),
+            episode_lengths=new_episode_length * (1 - done),
+            returned_episode_returns=state.returned_episode_returns * (1 - done)
+            + new_episode_return * done,
+            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
+            + new_episode_length * done,
+            timestep=state.timestep + 1,
         )
         # info["returned_episode_returns"] = state.returned_episode_returns
         # info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = done
-        info["return_info"] = jnp.stack([state.timestep, state.returned_episode_returns])
+        info["return_info"] = jnp.stack(
+            [state.timestep, state.returned_episode_returns]
+        )
         # info["timestep"] = state.timestep
         return obs, state, reward, done, info

@@ -1,12 +1,9 @@
-from typing import Optional, Tuple
-
 import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
 from flax import struct
 from gymnax.environments import environment, spaces
-from jax import lax
 
 
 def is_valid_placement(board, row, col, direction, ship_size):
@@ -19,24 +16,24 @@ def is_valid_placement(board, row, col, direction, ship_size):
 
     # Check validities
     horizontal_validity = jnp.logical_and(
-        col + ship_size <= board_shape[1], 
-        jnp.all(horizontal_board == 0)
+        col + ship_size <= board_shape[1], jnp.all(horizontal_board == 0)
     )
 
     vertical_validity = jnp.logical_and(
-        row + ship_size <= board_shape[0],
-        jnp.all(vertical_board == 0)
+        row + ship_size <= board_shape[0], jnp.all(vertical_board == 0)
     )
 
     return jnp.where(direction == 0, horizontal_validity, vertical_validity)
 
+
 vectorized_validity_check = jax.vmap(
-                                jax.vmap(
-                                    jax.vmap(
-                                        is_valid_placement, in_axes=(None, 0, None, None, None)
-                                    ), in_axes=(None, None, 0, None, None)
-                                ), in_axes=(None, None, None, 0, None)
-                            ) # Why
+    jax.vmap(
+        jax.vmap(is_valid_placement, in_axes=(None, 0, None, None, None)),
+        in_axes=(None, None, 0, None, None),
+    ),
+    in_axes=(None, None, None, 0, None),
+)  # Why
+
 
 def place_ship_on_board(board, row, col, direction, ship_size):
     """Place a ship on the board at the given position and direction."""
@@ -53,6 +50,7 @@ def place_ship_on_board(board, row, col, direction, ship_size):
 
     return updated_board
 
+
 def place_random_ship_on_board(rng, board, ship_size):
     size = board.shape[0]
     dirs = jnp.array([0, 1])
@@ -63,10 +61,15 @@ def place_random_ship_on_board(rng, board, ship_size):
     rand_valid = jax.random.choice(
         rng, jnp.arange(total_num_spots), shape=(1,), p=valid_spots.flatten()
     )[0]
-    direction, col, row = rand_valid // (size * size), (rand_valid % (size * size)) // size, (rand_valid % (size * size)) % size
+    direction, col, row = (
+        rand_valid // (size * size),
+        (rand_valid % (size * size)) // size,
+        (rand_valid % (size * size)) % size,
+    )
     # print(is_valid_placement(board, row, col, direction, ship_size))
     board = place_ship_on_board(board, row, col, direction, ship_size)
     return board
+
 
 def generate_random_board(rng, board_size, ship_sizes):
     board = jnp.zeros((board_size, board_size))
@@ -75,6 +78,7 @@ def generate_random_board(rng, board_size, ship_sizes):
         board = place_random_ship_on_board(_rng, board, ship_size)
     return board
 
+
 @struct.dataclass
 class EnvState:
     timestep: int
@@ -82,12 +86,13 @@ class EnvState:
     guesses: jnp.ndarray
     hits: int
 
+
 @struct.dataclass
 class EnvParams:
     pass
 
-class Battleship(environment.Environment):
 
+class Battleship(environment.Environment):
     def __init__(self, board_size=8):
         super().__init__()
         self.board_size = board_size
@@ -103,12 +108,11 @@ class Battleship(environment.Environment):
 
     def step_env(
         self, key: chex.PRNGKey, state: EnvState, action: int, params: EnvParams
-    ) -> Tuple[chex.Array, EnvState, float, bool, dict]:
-
+    ) -> tuple[chex.Array, EnvState, float, bool, dict]:
         action_x, action_y = action // self.board_size, action % self.board_size
         is_ship = state.board[action_x, action_y] == 1
-        guessed_before = state.guesses[action_x, action_y] == 1        
-        hit = jnp.logical_and(is_ship, jnp.logical_not(guessed_before))        
+        guessed_before = state.guesses[action_x, action_y] == 1
+        hit = jnp.logical_and(is_ship, jnp.logical_not(guessed_before))
         new_guesses = state.guesses.at[action_x, action_y].set(1)
         new_timestep = state.timestep + 1
         new_hits = state.hits + hit
@@ -132,7 +136,7 @@ class Battleship(environment.Environment):
 
     def reset_env(
         self, key: chex.PRNGKey, params: EnvParams
-    ) -> Tuple[chex.Array, EnvState]:
+    ) -> tuple[chex.Array, EnvState]:
         """Performs resetting of environment."""
         board = generate_random_board(key, self.board_size, self.ship_sizes)
         guesses = jnp.zeros((self.board_size, self.board_size))
@@ -147,9 +151,7 @@ class Battleship(environment.Environment):
 
         return obs, state
 
-    def action_space(
-        self, params: Optional[EnvParams] = None
-    ) -> spaces.Discrete:
+    def action_space(self, params: EnvParams | None = None) -> spaces.Discrete:
         """Action space of the environment."""
         # TODO: Multi-Discrete?
         return spaces.Discrete(self.board_size * self.board_size)
@@ -158,13 +160,16 @@ class Battleship(environment.Environment):
         """Observation space of the environment."""
         return spaces.Box(jnp.zeros((1,)), jnp.ones((1,)), (1,), dtype=jnp.float32)
 
+
 class BattleshipEasy(Battleship):
     def __init__(self):
         super().__init__(board_size=8)
 
+
 class BattleshipMedium(Battleship):
     def __init__(self):
         super().__init__(board_size=10)
+
 
 class BattleshipHard(Battleship):
     def __init__(self):

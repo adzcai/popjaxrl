@@ -1,5 +1,3 @@
-from typing import Optional, Tuple
-
 import chex
 import jax
 import jax.numpy as jnp
@@ -12,12 +10,14 @@ def angle_normalize(x: float) -> float:
     """Normalize the angle - radians."""
     return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi
 
+
 @struct.dataclass
 class EnvState:
     theta: float
     theta_dot: float
     last_u: float  # Only needed for rendering
     time: int
+
 
 @struct.dataclass
 class EnvParams:
@@ -27,6 +27,7 @@ class EnvParams:
     g: float = 10.0  # gravity
     m: float = 1.0  # mass
     l: float = 1.0  # length
+
 
 class NoisyStatelessPendulum(environment.Environment):
     """
@@ -51,13 +52,13 @@ class NoisyStatelessPendulum(environment.Environment):
         state: EnvState,
         action: float,
         params: EnvParams,
-    ) -> Tuple[chex.Array, EnvState, float, bool, dict]:
+    ) -> tuple[chex.Array, EnvState, float, bool, dict]:
         """Integrate pendulum ODE and return transition."""
         u = jnp.clip(action, -params.max_torque, params.max_torque)
         reward = -(
             angle_normalize(state.theta) ** 2
-            + 0.1 * state.theta_dot ** 2
-            + 0.001 * (u ** 2)
+            + 0.1 * state.theta_dot**2
+            + 0.001 * (u**2)
         )
         reward = reward.squeeze()
         reward = self.reward_transform(params, reward)
@@ -65,7 +66,7 @@ class NoisyStatelessPendulum(environment.Environment):
         newthdot = state.theta_dot + (
             (
                 3 * params.g / (2 * params.l) * jnp.sin(state.theta)
-                + 3.0 / (params.m * params.l ** 2) * u
+                + 3.0 / (params.m * params.l**2) * u
             )
             * params.dt
         )
@@ -95,7 +96,7 @@ class NoisyStatelessPendulum(environment.Environment):
 
     def reset_env(
         self, key: chex.PRNGKey, params: EnvParams
-    ) -> Tuple[chex.Array, EnvState]:
+    ) -> tuple[chex.Array, EnvState]:
         """Reset environment state by sampling theta, theta_dot."""
         high = jnp.array([jnp.pi, 1])
         state = jax.random.uniform(key, shape=(2,), minval=-high, maxval=high)
@@ -103,15 +104,20 @@ class NoisyStatelessPendulum(environment.Environment):
         key, _ = jax.random.split(key)
         return self.get_obs(key, state, params), state
 
-    def get_obs(self, key: chex.PRNGKey, state: EnvState, params: EnvParams) -> chex.Array:
+    def get_obs(
+        self, key: chex.PRNGKey, state: EnvState, params: EnvParams
+    ) -> chex.Array:
         """Return angle in polar coordinates and change."""
-        return jnp.array(
-            [
-                jnp.cos(state.theta),
-                jnp.sin(state.theta),
-                # state.theta_dot,
-            ]
-        ).squeeze() + jax.random.normal(key, shape=(2,)) * self.noise_sigma
+        return (
+            jnp.array(
+                [
+                    jnp.cos(state.theta),
+                    jnp.sin(state.theta),
+                    # state.theta_dot,
+                ]
+            ).squeeze()
+            + jax.random.normal(key, shape=(2,)) * self.noise_sigma
+        )
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> bool:
         """Check whether state is terminal."""
@@ -129,7 +135,7 @@ class NoisyStatelessPendulum(environment.Environment):
         """Number of actions possible in environment."""
         return 1
 
-    def action_space(self, params: Optional[EnvParams] = None) -> spaces.Box:
+    def action_space(self, params: EnvParams | None = None) -> spaces.Box:
         """Action space of the environment."""
         if params is None:
             params = self.default_params
@@ -172,25 +178,31 @@ class NoisyStatelessPendulum(environment.Environment):
             }
         )
 
+
 class NoisyStatelessPendulumEasy(NoisyStatelessPendulum):
     def __init__(self):
         super().__init__(noise_sigma=0.1, max_steps_in_episode=200)
+
 
 class NoisyStatelessPendulumMedium(NoisyStatelessPendulum):
     def __init__(self):
         super().__init__(noise_sigma=0.2, max_steps_in_episode=200)
 
+
 class NoisyStatelessPendulumHard(NoisyStatelessPendulum):
     def __init__(self):
         super().__init__(noise_sigma=0.3, max_steps_in_episode=200)
+
 
 class StatelessPendulumEasy(NoisyStatelessPendulum):
     def __init__(self):
         super().__init__(noise_sigma=0.0, max_steps_in_episode=200)
 
+
 class StatelessPendulumMedium(NoisyStatelessPendulum):
     def __init__(self):
         super().__init__(noise_sigma=0.0, max_steps_in_episode=150)
+
 
 class StatelessPendulumHard(NoisyStatelessPendulum):
     def __init__(self):

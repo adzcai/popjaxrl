@@ -14,3 +14,7 @@ dependencies = [
     "optax>=0.2.5",
     "wandb>=0.21.0",
 ]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "SIM", "UP"]
+ignore = ["F722", "B008"]

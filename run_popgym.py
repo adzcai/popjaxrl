@@ -11,7 +11,7 @@ from envs.wrappers import AliasPrevActionV2
 
 
 def run(num_runs, env_name, arch="gru", file_tag=""):
-    print("*"*10)
+    print("*" * 10)
     print(f"Running {num_runs} runs of {env_name} with arch {arch}")
     env, env_params = make(env_name)
 
@@ -84,6 +84,7 @@ def run(num_runs, env_name, arch="gru", file_tag=""):
         raise NotImplementedError
 
     jnp.save(f"results/{num_runs}_{env_name}_{arch}_{file_tag}.npy", info_dict)
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--num-runs", type=int, required=True)

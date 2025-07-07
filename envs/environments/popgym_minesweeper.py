@@ -1,12 +1,9 @@
-from typing import Optional, Tuple
-
 import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
 from flax import struct
 from gymnax.environments import environment, spaces
-from jax import lax
 
 
 @struct.dataclass
@@ -15,12 +12,13 @@ class EnvState:
     mine_grid: jnp.ndarray
     neighbor_grid: jnp.ndarray
 
+
 @struct.dataclass
 class EnvParams:
     pass
 
-class MineSweeper(environment.Environment):
 
+class MineSweeper(environment.Environment):
     def __init__(self, dims=(4, 4), num_mines=2):
         super().__init__()
         self.dims = dims
@@ -36,8 +34,7 @@ class MineSweeper(environment.Environment):
 
     def step_env(
         self, key: chex.PRNGKey, state: EnvState, action: int, params: EnvParams
-    ) -> Tuple[chex.Array, EnvState, float, bool, dict]:
-
+    ) -> tuple[chex.Array, EnvState, float, bool, dict]:
         mine = state.mine_grid[action] == 1
         viewed = state.mine_grid[action] == 2
 
@@ -46,7 +43,7 @@ class MineSweeper(environment.Environment):
         reward = self.success_reward_scale
         reward = jnp.where(viewed, self.bad_action_reward_scale, reward)
         reward = jnp.where(mine, self.fail_reward_scale, reward)
-    
+
         terminated = state.timestep == self.max_episode_length
         terminated = jnp.where(mine, True, terminated)
         terminated = jnp.logical_or(terminated, jnp.all(new_grid == 2))
@@ -64,14 +61,18 @@ class MineSweeper(environment.Environment):
 
     def reset_env(
         self, key: chex.PRNGKey, params: EnvParams
-    ) -> Tuple[chex.Array, EnvState]:
+    ) -> tuple[chex.Array, EnvState]:
         """Performs resetting of environment."""
         # hidden_grid = jnp.zeros((params.dims[0] * params.dims[1],), dtype=jnp.int8)
         hidden_grid = jnp.zeros((self.dims[0] * self.dims[1],), dtype=jnp.int8)
-        mines_flat = jax.random.choice(key, hidden_grid.shape[0], shape=(self.num_mines,), replace=False)
+        mines_flat = jax.random.choice(
+            key, hidden_grid.shape[0], shape=(self.num_mines,), replace=False
+        )
         hidden_grid = hidden_grid.at[mines_flat].set(1)
         hidden_grid = hidden_grid.reshape(self.dims)
-        neighbor_grid = jax.scipy.signal.convolve2d(hidden_grid, np.ones((3,3), dtype=jnp.int8), mode="same")
+        neighbor_grid = jax.scipy.signal.convolve2d(
+            hidden_grid, np.ones((3, 3), dtype=jnp.int8), mode="same"
+        )
         neighbor_grid = jnp.array(neighbor_grid, dtype=jnp.int8)
 
         state = EnvState(
@@ -82,24 +83,30 @@ class MineSweeper(environment.Environment):
 
         return jnp.zeros((self.num_mines,)), state
 
-    def action_space(
-        self, params: Optional[EnvParams] = None
-    ) -> spaces.Discrete:
+    def action_space(self, params: EnvParams | None = None) -> spaces.Discrete:
         """Action space of the environment."""
         # TODO: Multi-Discrete?
         return spaces.Discrete(np.prod(self.dims))
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
         """Observation space of the environment."""
-        return spaces.Box(jnp.zeros((self.num_mines,)), jnp.ones((self.num_mines,)), (self.num_mines,), dtype=jnp.float32)
+        return spaces.Box(
+            jnp.zeros((self.num_mines,)),
+            jnp.ones((self.num_mines,)),
+            (self.num_mines,),
+            dtype=jnp.float32,
+        )
+
 
 class MineSweeperEasy(MineSweeper):
     def __init__(self):
         super().__init__(dims=(4, 4), num_mines=2)
 
+
 class MineSweeperMedium(MineSweeper):
     def __init__(self):
         super().__init__(dims=(6, 6), num_mines=6)
+
 
 class MineSweeperHard(MineSweeper):
     def __init__(self):
