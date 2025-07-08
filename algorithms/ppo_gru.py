@@ -1,110 +1,196 @@
-import functools
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+import math
 from typing import NamedTuple
 
 import distrax
-import flax.linen as nn
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.random as jr
 import numpy as np
 import optax
 import wandb
-from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from gymnax.environments import spaces
+from jax.nn import initializers
+from jaxtyping import Array, Bool, Float, Key, PyTree
 
 from envs.wrappers import LogWrapper
 
 
-class ScannedRNN(nn.Module):
-    @functools.partial(
-        nn.scan,
-        variable_broadcast="params",
-        in_axes=0,
-        out_axes=0,
-        split_rngs={"params": False},
+Initializer = Callable[[Key[Array, ""], tuple[int, ...], jax.typing.DTypeLike], Array]
+
+
+def tree_initialize(
+    get_weights: Callable[[PyTree], Sequence[Array]],
+    model: PyTree,
+    initializers: Sequence[Initializer],
+    *,
+    key: Key[Array, ""],
+):
+    """Initialize parameters of an Equinox module using jax.nn.initializers."""
+    weights = get_weights(model)
+    weights = [
+        init(k, weight.shape, weight.dtype)
+        for weight, init, k in zip(
+            weights,
+            initializers,
+            jr.split(key, len(weights)),
+            strict=True,
+        )
+    ]
+    return eqx.tree_at(get_weights, model, weights)
+
+
+def mlp_orthogonal(model: eqx.nn.MLP, scales: Sequence[float], key: Key[Array, ""]):
+    return tree_initialize(
+        lambda net: [linear.weight for linear in net.layers]
+        + [linear.bias for linear in net.layers],
+        model,
+        [initializers.orthogonal(scale) for scale in scales]
+        + [initializers.zeros] * (model.depth + 1),
+        key=key,
     )
-    @nn.compact
-    def __call__(self, carry, x):
+
+
+class ScannedRNN(eqx.Module):
+    cell: eqx.nn.GRUCell
+
+    def __init__(self, hidden_size: int, input_size: int, *, key: Key[Array, ""]):
+        cell = eqx.nn.GRUCell(
+            hidden_size=hidden_size, input_size=input_size, key=jr.key(0)
+        )
+        self.cell = tree_initialize(
+            lambda cell: [cell.weight_ih, cell.weight_hh, cell.bias, cell.bias_n],
+            cell,
+            [
+                lambda key, shape, dtype: jnp.concat(
+                    [
+                        initializers.lecun_normal()(k, (shape[0] // 3, shape[1]), dtype)
+                        for k in jr.split(key, 3)
+                    ]
+                ),
+                lambda key, shape, dtype: jnp.concat(
+                    [
+                        initializers.orthogonal()(k, (shape[0] // 3, shape[1]), dtype)
+                        for k in jr.split(key, 3)
+                    ]
+                ),
+                initializers.zeros,
+                initializers.zeros,
+            ],
+            key=key,
+        )
+
+    def __call__(
+        self,
+        rnn_state_tm1: Float[Array, " hidden_dim"],
+        embedding_t: Float[Array, " obs_dim"],
+        is_first_t: Bool[Array, ""],
+    ):
         """Applies the module."""
-        rnn_state = carry
-        ins, resets = x
-        rnn_state = jnp.where(
-            resets[:, np.newaxis],
-            self.initialize_carry(ins.shape[0], ins.shape[1]),
-            rnn_state,
+        rnn_state_tm1 = jnp.where(is_first_t, self.initialize_carry(), rnn_state_tm1)
+        rnn_state_t = self.cell(hidden=rnn_state_tm1, input=embedding_t)
+        return rnn_state_t, rnn_state_t
+
+    def initialize_carry(self) -> Float[Array, " hidden_size"]:
+        return jnp.zeros(self.cell.hidden_size)
+
+
+class ActorCriticRNN(eqx.Module):
+    obs_embedding: eqx.nn.MLP
+    actor_mean: eqx.nn.MLP
+    critic: eqx.nn.MLP
+    scanned_rnn: ScannedRNN
+    action_log_std: Float[Array, " action_dim"] | None
+
+    def __init__(
+        self,
+        obs_shape: tuple[int, ...],
+        hidden_size: int,
+        action_size: int,
+        continuous: bool,
+        *,
+        key: Key[Array, ""],
+    ):
+        key_obs, key_rnn, key_actor, key_critic = jr.split(key, 4)
+        obs_embedding = eqx.nn.MLP(
+            in_size=obs_shape[-1],
+            out_size=256,
+            width_size=128,
+            depth=1,
+            activation=jax.nn.leaky_relu,
+            final_activation=jax.nn.leaky_relu,
+            key=jr.key(0),
         )
-        new_rnn_state, y = nn.GRUCell()(rnn_state, ins)
-        return new_rnn_state, y
-
-    @staticmethod
-    def initialize_carry(batch_size, hidden_size):
-        return nn.GRUCell.initialize_carry(
-            jax.random.PRNGKey(0), (batch_size,), hidden_size
+        self.obs_embedding = mlp_orthogonal(
+            obs_embedding, [math.sqrt(2)] * (obs_embedding.depth + 1), key=key_obs
+        )
+        self.scanned_rnn = ScannedRNN(
+            hidden_size=hidden_size, input_size=256, key=key_rnn
+        )
+        actor_mean = eqx.nn.MLP(
+            in_size=hidden_size,
+            out_size=action_size,
+            width_size=128,
+            depth=2,
+            activation=jax.nn.leaky_relu,
+            final_activation=jax.nn.leaky_relu,
+            key=jr.key(0),
+        )
+        self.actor_mean = mlp_orthogonal(
+            actor_mean,
+            [2.0] * actor_mean.depth + [0.01],
+            key=key_actor,
+        )
+        self.action_log_std = jnp.zeros(action_size) if continuous else None
+        critic = eqx.nn.MLP(
+            in_size=hidden_size,
+            out_size="scalar",
+            width_size=128,
+            depth=2,
+            activation=jax.nn.leaky_relu,
+            key=jr.key(0),
+        )
+        self.critic = mlp_orthogonal(
+            critic,
+            [2.0] * critic.depth + [1.0],
+            key=key_critic,
         )
 
-
-class ActorCriticRNN(nn.Module):
-    action_dim: Sequence[int]
-    config: dict
-
-    @nn.compact
-    def __call__(self, hidden, x):
-        obs, dones = x
-        embedding = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(obs)
-        embedding = nn.leaky_relu(embedding)
-        embedding = nn.Dense(
-            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(embedding)
-        embedding = nn.leaky_relu(embedding)
-
-        rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
-
-        actor_mean = nn.Dense(128, kernel_init=orthogonal(2), bias_init=constant(0.0))(
-            embedding
+    def __call__(
+        self,
+        rnn_state_tm1: Float[Array, " hidden_size"],
+        obs_s: Float[Array, " horizon *obs_shape"],
+        is_first_s: Bool[Array, " horizon"],
+    ):
+        embedding_s = jax.vmap(self.obs_embedding)(obs_s)
+        rnn_state, hidden_s = jax.lax.scan(
+            lambda carry, x: self.scanned_rnn(carry, *x),
+            rnn_state_tm1,
+            (embedding_s, is_first_s),
         )
-        actor_mean = nn.leaky_relu(actor_mean)
-        actor_mean = nn.Dense(128, kernel_init=orthogonal(2), bias_init=constant(0.0))(
-            actor_mean
-        )
-        actor_mean = nn.leaky_relu(actor_mean)
-        actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
-        )(actor_mean)
-        # pi = distrax.Categorical(logits=actor_mean)
-        if self.config["CONTINUOUS"]:
-            actor_logtstd = self.param(
-                "log_std", nn.initializers.zeros, (self.action_dim,)
+
+        actor_mean = jax.vmap(self.actor_mean)(hidden_s)
+
+        if self.action_log_std is not None:
+            pi = distrax.MultivariateNormalDiag(
+                actor_mean, jnp.exp(self.action_log_std)
             )
-            pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
         else:
             pi = distrax.Categorical(logits=actor_mean)
 
-        critic = nn.Dense(128, kernel_init=orthogonal(2), bias_init=constant(0.0))(
-            embedding
-        )
-        critic = nn.leaky_relu(critic)
-        critic = nn.Dense(128, kernel_init=orthogonal(2), bias_init=constant(0.0))(
-            critic
-        )
-        critic = nn.leaky_relu(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
-            critic
-        )
-
-        return hidden, pi, jnp.squeeze(critic, axis=-1)
+        critic = jax.vmap(self.critic)(hidden_s)
+        return rnn_state, pi, critic
 
 
 class Transition(NamedTuple):
-    done: jnp.ndarray
+    done: Bool[Array, ""]
     action: jnp.ndarray
-    value: jnp.ndarray
+    value: Float[Array, ""]
     reward: jnp.ndarray
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
+    log_prob: Float[Array, ""]
+    obs: Float[Array, " *obs_shape"]
     info: jnp.ndarray
 
 
@@ -119,7 +205,7 @@ def make_train(config):
     env, env_params = config["ENV"], config["ENV_PARAMS"]
     env = LogWrapper(env)
 
-    config["CONTINUOUS"] = type(env.action_space(env_params)) == spaces.Box
+    config["CONTINUOUS"] = type(env.action_space(env_params)) is spaces.Box
 
     def linear_schedule(count):
         frac = (
@@ -131,22 +217,20 @@ def make_train(config):
 
     def train(rng):
         # INIT NETWORK
-        if config["CONTINUOUS"]:
-            network = ActorCriticRNN(
-                env.action_space(env_params).shape[0], config=config
-            )
-        else:
-            network = ActorCriticRNN(env.action_space(env_params).n, config=config)
-        rng, _rng = jax.random.split(rng)
-        init_x = (
-            jnp.zeros(
-                (1, config["NUM_ENVS"], *env.observation_space(env_params).shape)
-            ),
-            jnp.zeros((1, config["NUM_ENVS"])),
+        rng, _rng = jr.split(rng)
+        action_size = (
+            env.action_space(env_params).shape[0]
+            if config["CONTINUOUS"]
+            else env.action_space(env_params).n
         )
-        # init_hstate = StackedEncoderModel.initialize_carry(config["NUM_ENVS"], ssm_size, n_layers)
-        init_hstate = ScannedRNN.initialize_carry(config["NUM_ENVS"], 256)
-        network_params = network.init(_rng, init_hstate, init_x)
+        network = ActorCriticRNN(
+            obs_shape=env.observation_space(env_params).shape,
+            hidden_size=256,
+            action_size=action_size,
+            continuous=config["CONTINUOUS"],
+            key=_rng,
+        )
+        network_params, network_static = eqx.partition(network, eqx.is_inexact_array)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -157,28 +241,43 @@ def make_train(config):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["LR"], eps=1e-5),
             )
+
+        def apply_fn(params, rnn_state_tm1, x):
+            obs_t, is_first_t = x
+            net = eqx.combine(params[0], network_static)
+            rnn_state_bt, pi_bs, actor_bs = jax.vmap(net)(
+                rnn_state_tm1, jnp.swapaxes(obs_t, 0, 1), jnp.swapaxes(is_first_t, 0, 1)
+            )
+            return (
+                rnn_state_bt,
+                type(pi_bs)(logits=jnp.swapaxes(pi_bs.logits, 0, 1)),
+                jnp.swapaxes(actor_bs, 0, 1),
+            )
+
         train_state = TrainState.create(
-            apply_fn=network.apply,
-            params=network_params,
+            apply_fn=apply_fn,
+            params=(network_params,),  # must be container
             tx=tx,
         )
 
         # INIT ENV
-        rng, _rng = jax.random.split(rng)
-        reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
+        rng, _rng = jr.split(rng)
+        reset_rng = jr.split(_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
-        init_hstate = ScannedRNN.initialize_carry(config["NUM_ENVS"], 256)
+        init_hstate = jnp.tile(
+            network.scanned_rnn.initialize_carry(), (config["NUM_ENVS"], 1)
+        )
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, last_done, hstate, rng = runner_state
-                rng, _rng = jax.random.split(rng)
+                rng, _rng = jr.split(rng)
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
+                hstate, pi, value = apply_fn(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -188,8 +287,8 @@ def make_train(config):
                 )
 
                 # STEP ENV
-                rng, _rng = jax.random.split(rng)
-                rng_step = jax.random.split(_rng, config["NUM_ENVS"])
+                rng, _rng = jr.split(rng)
+                rng_step = jr.split(_rng, config["NUM_ENVS"])
                 obsv, env_state, reward, done, info = jax.vmap(
                     env.step, in_axes=(0, 0, 0, None)
                 )(rng_step, env_state, action, env_params)
@@ -207,7 +306,7 @@ def make_train(config):
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, last_done, hstate, rng = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val = network.apply(train_state.params, hstate, ac_in)
+            _, _, last_val = apply_fn(train_state.params, hstate, ac_in)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -247,7 +346,7 @@ def make_train(config):
 
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        _, pi, value = network.apply(
+                        _, pi, value = apply_fn(
                             params, init_hstate[0], (traj_batch.obs, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
@@ -296,8 +395,8 @@ def make_train(config):
                     update_state
                 )
 
-                rng, _rng = jax.random.split(rng)
-                permutation = jax.random.permutation(_rng, config["NUM_ENVS"])
+                rng, _rng = jr.split(rng)
+                permutation = jr.permutation(_rng, config["NUM_ENVS"])
                 batch = (init_hstate, traj_batch, advantages, targets)
 
                 shuffled_batch = jax.tree.map(
@@ -356,6 +455,7 @@ def make_train(config):
                     def callback(metric):
                         print(metric)
                         wandb.log({"metric": metric})
+
                 else:
 
                     def callback(metric):
@@ -371,7 +471,7 @@ def make_train(config):
             runner_state = (train_state, env_state, last_obs, last_done, hstate, rng)
             return runner_state, metric
 
-        rng, _rng = jax.random.split(rng)
+        rng, _rng = jr.split(rng)
         runner_state = (
             train_state,
             env_state,
